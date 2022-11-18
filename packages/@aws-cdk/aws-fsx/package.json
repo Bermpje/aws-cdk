@@ -113,7 +113,10 @@
     "exclude": [
       "props-physical-name:@aws-cdk/aws-fsx.LustreFileSystemProps",
       "resource-interface:@aws-cdk/aws-fsx.LustreFileSystem",
-      "resource-attribute:@aws-cdk/aws-fsx.LustreFileSystem.fileSystemRootVolumeId"
+      "resource-attribute:@aws-cdk/aws-fsx.LustreFileSystem.fileSystemRootVolumeId",
+      "props-physical-name:@aws-cdk/aws-fsx.WindowsFileSystemProps",
+      "resource-attribute:@aws-cdk/aws-fsx.WindowsFileSystem.fileSystemLustreMountName",
+      "resource-attribute:@aws-cdk/aws-fsx.WindowsFileSystem.fileSystemRootVolumeId"
     ]
   },
   "stability": "stable",
