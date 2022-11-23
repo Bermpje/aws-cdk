@@ -3,6 +3,10 @@ import { Aws } from '@aws-cdk/core';
 import { Construct } from 'constructs';
 import { FileSystemAttributes, FileSystemBase, FileSystemProps, IFileSystem } from './file-system';
 import { CfnFileSystem } from './fsx.generated';
+import { WindowsMaintenanceTime } from './windows-maintenance-time';
+import { AuditLogConfiguration } from './audit-log-configuration';
+import { SelfManagedActiveDirectoryConfiguration } from './self-managed-AD-configuration';
+import { BackupStartTime } from './backup-start-time';
 
 /**
  * The different kinds of file system deployments used by Windows.
@@ -51,23 +55,69 @@ export interface WindowsConfiguration {
   readonly deploymentType: WindowsDeploymentType;
 
   /**
+   * The ID for an existing AWS Managed Microsoft Active Directory (AD) instance that the file system should join when it's created.
+   * Required if you are joining the file system to an existing AWS Managed Microsoft AD.
+   * @default - no default, conditionally required when using an existing AWS Managed Microsoft AD.
+   */
+  readonly activeDirectoryId?: string;
+
+  /**
+   * An array of one or more DNS alias names that you want to associate with the Amazon FSx file system.
+   */
+  readonly aliases?: string[];
+
+  /**
+   * The configuration that Amazon FSx for Windows File Server uses to audit and log user accesses of files, folders, and file shares on the Amazon FSx for Windows File Server file system.
+   */
+  readonly auditLogConfiguration?: AuditLogConfiguration;
+
+  /**
+   * The number of days to retain automatic backups.
+   * @default 0
+   */
+  readonly automaticBackupRetentionDays?: number;
+
+  /**
+   * A boolean flag indicating whether tags for the file system should be copied to backups.
+   * @default false
+   */
+  readonly copyTagsToBackups?: boolean;
+
+  /**
+   * A recurring daily time, in the format HH:MM. HH is the zero-padded hour of the day (0-23), and MM is the zero-padded minute of the hour. For example, 05:00 specifies 5 AM daily.
+   * @default - no preference
+   */
+  readonly dailyAutomaticBackupStartTime?: BackupStartTime;
+
+  /**
+   * Required when DeploymentType is set to MULTI_AZ_1. This specifies the subnet in which you want the preferred file server to be located.
+   * @default - no default, conditionally required when DeploymentType is set to MULTI_AZ_1.
+   */
+  readonly preferredSubnetId?: string;
+
+  /**
+   * The configuration that Amazon FSx uses to join a FSx for Windows File Server file system or an ONTAP storage virtual machine (SVM) to a self-managed (including on-premises) Microsoft Active Directory (AD) directory.
+   */
+  readonly selfManagedActiveDirectoryConfiguration?: SelfManagedActiveDirectoryConfiguration;
+
+  /**
    * The type of the storage used by FSx
    */
-  readonly storageType: WindowsStorageType;
+  readonly storageType?: WindowsStorageType;
 
   /**
    * Sets the throughput capacity of an Amazon FSx file system, measured in megabytes per second (MB/s)
    */
   readonly throughputCapacity: number;
 
-  // /**
-  //  * The preferred day and time to perform weekly maintenance. The first digit is the day of the week, starting at 1
-  //  * for Monday, then the following are hours and minutes in the UTC time zone, 24 hour clock. For example: '2:20:30'
-  //  * is Tuesdays at 20:30.
-  //  *
-  //  * @default - no preference
-  //  */
-  // readonly weeklyMaintenanceStartTime?: LustreMaintenanceTime;
+  /**
+   * The preferred day and time to perform weekly maintenance. The first digit is the day of the week, starting at 1
+   * for Monday, then the following are hours and minutes in the UTC time zone, 24 hour clock. For example: '2:20:30'
+   * is Tuesdays at 20:30.
+   *
+   * @default - no preference
+   */
+  readonly weeklyMaintenanceStartTime?: WindowsMaintenanceTime;
 }
 
 /**
@@ -156,12 +206,11 @@ export class WindowsFileSystem extends FileSystemBase {
 
     this.validateProps(props);
 
-    // const updatedWindowsProps = {
-    //   importedFileChunkSize: props.windowsConfiguration.importedFileChunkSizeMiB,
-    //   weeklyMaintenanceStartTime: props.windowsConfiguration.weeklyMaintenanceStartTime?.toTimestamp(),
-    // };
-    // const windowsConfiguration = Object.assign({}, props.windowsConfiguration, updatedWindowsProps);
-    const windowsConfiguration = props.windowsConfiguration;
+    const updatedWindowsProps = {
+       dailyAutomaticBackupStartTime: props.windowsConfiguration.dailyAutomaticBackupStartTime?.toTimestamp(),
+       weeklyMaintenanceStartTime: props.windowsConfiguration.weeklyMaintenanceStartTime?.toTimestamp(),
+    };
+    const windowsConfiguration = Object.assign({}, props.windowsConfiguration, updatedWindowsProps);
 
     const securityGroup = (props.securityGroup || new SecurityGroup(this, 'FsxWindowsSecurityGroup', {
       vpc: props.vpc,
@@ -187,31 +236,128 @@ export class WindowsFileSystem extends FileSystemBase {
   }
 
   /**
-   * Validates the props provided for a new FSx for Lustre file system.
+   * Validates the props provided for a new FSx for Windows file system.
    */
   private validateProps(props: WindowsFileSystemProps) {
     const windowsConfiguration = props.windowsConfiguration;
-    const throughputCapacity = windowsConfiguration.throughputCapacity;
+    this.validateActiveDirectoryId(windowsConfiguration.activeDirectoryId);
+    this.validateThroughputCapacity(windowsConfiguration.throughputCapacity);
+    this.validateAliases(windowsConfiguration.aliases);
+    this.validatePreferredSubnetId(windowsConfiguration.deploymentType, windowsConfiguration.preferredSubnetId,);
+    this.validateDnsIps(windowsConfiguration.selfManagedActiveDirectoryConfiguration?.dnsIps);
+    this.validateDomainName(windowsConfiguration.selfManagedActiveDirectoryConfiguration?.domainName);
+    this.validateFileSystemAdministratorsGroup(windowsConfiguration.selfManagedActiveDirectoryConfiguration?.fileSystemAdministratorsGroup);
+    this.validateOrganizationalUnitDistinguishedName(windowsConfiguration.selfManagedActiveDirectoryConfiguration?.organizationalUnitDistinguishedName);
+    this.validatePassword(windowsConfiguration.selfManagedActiveDirectoryConfiguration?.password);
+    this.validateUsername(windowsConfiguration.selfManagedActiveDirectoryConfiguration?.username);
+    this.validateARN(windowsConfiguration.auditLogConfiguration?.auditLogDestination);
+  }
 
-    this.validateThroughputCapacity(throughputCapacity);
-    this.validateStorageCapacity(props.storageCapacityGiB);
+  /**
+   * Validates the Active Directory Id.
+   */
+   private validateActiveDirectoryId(activeDirectoryId?: string): void  {
+    const activeDirectoryRegex = new RegExp('^d-[0-9a-f]{10}$');
+    if (activeDirectoryId && !activeDirectoryRegex.test(activeDirectoryId)) {
+      throw new Error('Active Directory ID must begin with the literal d- and should be followed by exactly 10 alphanumeric characters. Allowed alphanumeric values include 0-9 and a-f.');
+    }
   }
 
   /**
    * Validates the throughput capacity is an acceptable value.
    */
-  private validateThroughputCapacity( throughputCapacity: number): void {
+  private validateThroughputCapacity(throughputCapacity: number): void {
     if ((throughputCapacity < 8 || throughputCapacity > 4096) || !(Math.log2(throughputCapacity) % 1 === 0)) {
-      throw new Error('throughput capacity must be between 8 and 4096 GiB and a power of 2');
+      throw new Error('Throughput Capacity must be between 8 and 4096 GiB and a power of 2');
     }
   }
 
   /**
-   * Validates the storage capacity is an acceptable value for the deployment type.
+   * Validates the count of DNS aliases.
    */
-  private validateStorageCapacity( storageCapacity: number): void {
-    if (storageCapacity < 32 || storageCapacity > 65536 ) {
-      throw new Error('storageCapacity must be between 32 and 65536 GiB');
+   private validateAliases(aliases?: string[]): void  {
+    if (aliases && aliases.length > 50) {
+      throw new Error('List must not exceed 50 DNS alias names.');
     }
   }
+
+  /**
+   * Validates that the PreferredSubnetId is defined based on the deploymentType.
+   */
+  private validatePreferredSubnetId(deploymentType: WindowsDeploymentType, preferredSubnetId?: string): void  {
+    if (deploymentType === WindowsDeploymentType.MULTI_AZ_1 && preferredSubnetId === undefined) {
+      throw new Error('Preferred Subnet ID is required when deploymentType is set to MULTI_AZ_1');
+    }
+  }
+
+  /**
+   * Validates the count of DNS IP addresses in the self managed Active Directory configuration.
+   */
+  private validateDnsIps(dnsIps?: string[]): void  {
+    if (dnsIps && dnsIps.length > 3) {
+      throw new Error('List must not exceed 3 DNS IPs.');
+    }
+  }
+
+  /**
+   * Validates the domain name in the self managed Active Directory configuration.
+   */
+  private validateDomainName(domainName?: string): void  {
+    const domainRegex = new RegExp('^[^\u0000\u0085\u2028\u2029\r\n]{1,255}$');
+    if (domainName && !domainRegex.test(domainName)) {
+      throw new Error('Value must be a valid Domain Name. It must not contain newline, carriage return, line separator or paragraph separator and must not exceed 255 characters limit.');
+    }
+  }
+
+  /**
+   * Validates the file system administrators group in the self managed Active Directory configuration.
+   */
+  private validateFileSystemAdministratorsGroup(fileSystemAdministratorsGroup?: string): void  {
+    const fsAdminGroupRegex = new RegExp('^[^\u0000\u0085\u2028\u2029\r\n]{1,256}$');
+    if (fileSystemAdministratorsGroup && !fsAdminGroupRegex.test(fileSystemAdministratorsGroup)) {
+      throw new Error('Value must be a valid Domain Group. It must not contain newline, carriage return, line separator or paragraph separator and must not exceed 256 characters limit.');
+    }
+  }
+
+  /**
+   * Validates the organizational unit distinguished name in the self managed Active Directory configuration.
+   */
+  private validateOrganizationalUnitDistinguishedName(organizationalUnitDistinguishedName?: string): void  {
+    const ouNameRegex = new RegExp('^[^\u0000\u0085\u2028\u2029\r\n]{1,2000}$');
+    if (organizationalUnitDistinguishedName && !ouNameRegex.test(organizationalUnitDistinguishedName)) {
+      throw new Error('Value must be a valid fully qualified distinguished name of the organizational unit. It must not contain newline, carriage return, line separator or paragraph separator and must not exceed 2000 characters limit.');
+    }
+  }
+
+  /**
+   * Validates the password in the self managed Active Directory configuration.
+   */
+  private validatePassword(password?: string): void  {
+    const passwordRegex = new RegExp('^.{1,256}$');
+    if (password && !passwordRegex.test(password)) {
+      throw new Error('Password must not exceed 256 characters limit.');
+    }
+  }
+
+  /**
+   * Validates the username in the self managed Active Directory configuration.
+   */
+  private validateUsername(username?: string): void  {
+    const usernameRegex = new RegExp('^[^\u0000\u0085\u2028\u2029\r\n]{1,256}$');
+    if (username && !usernameRegex.test(username)) {
+      throw new Error('Username must not contain newline, carriage return, line separator or paragraph separator and must not exceed 256 characters limit.');
+    }
+  }
+
+  /**
+   * Validates the ARN for the audit log destination in the audit log configuration.
+   */
+  private validateARN (auditLogDestination?: string): void {
+
+    const regexARN = new RegExp('^arn:[^:]{1,63}:[^:]{0,63}:[^:]{0,63}:(?:|\d{12}):[^/].{0,1023}$');
+    if (auditLogDestination && !regexARN.test(auditLogDestination)) {
+      throw new Error('Audit Log Destination must be a valid ARN');
+    }
+  }
+
 }
