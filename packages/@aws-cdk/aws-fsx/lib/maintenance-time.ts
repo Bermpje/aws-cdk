@@ -1,7 +1,7 @@
 /**
  * Enum for representing all the days of the week
  */
-export enum Weekday {
+ export enum Weekday {
   /**
    * Monday
    */
@@ -35,7 +35,7 @@ export enum Weekday {
 /**
  * Properties required for setting up a weekly maintenance time
  */
-export interface LustreMaintenanceTimeProps {
+export interface MaintenanceTimeProps {
   /**
    * The day of the week for maintenance to be performed.
    */
@@ -53,7 +53,7 @@ export interface LustreMaintenanceTimeProps {
 /**
  * Class for scheduling a weekly manitenance time.
  */
-export class LustreMaintenanceTime {
+export class MaintenanceTime {
   /**
    * The day of the week for maintenance to be performed.
    */
@@ -67,7 +67,7 @@ export class LustreMaintenanceTime {
    */
   private readonly minute: string;
 
-  constructor(props: LustreMaintenanceTimeProps) {
+  constructor(props: MaintenanceTimeProps) {
     this.validate(props.hour, props.minute);
 
     this.day = props.day;

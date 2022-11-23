@@ -1,5 +1,6 @@
 import { strictEqual } from 'assert';
-import { LustreMaintenanceTime, Weekday } from '../lib';
+import { Weekday } from '../lib';
+import { LustreMaintenanceTime } from '../lib/lustre-maintenance-time';
 
 test.each([
   [Weekday.SUNDAY, 0, 0, '7:00:00'],
